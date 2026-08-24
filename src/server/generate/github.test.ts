@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getGitHubApiHeaders } = vi.hoisted(() => ({
+const { getGitHubApiHeaders, hasGitHubAppAuth } = vi.hoisted(() => ({
   getGitHubApiHeaders: vi.fn(),
+  hasGitHubAppAuth: vi.fn(() => false),
 }));
 
 vi.mock("~/server/github-auth", () => ({
   getGitHubApiHeaders,
+  hasGitHubAppAuth,
 }));
 
 import {
@@ -57,6 +59,8 @@ describe("getGithubData repository input bounds", () => {
     getGitHubApiHeaders.mockResolvedValue({
       Accept: "application/vnd.github+json",
     });
+    hasGitHubAppAuth.mockReset();
+    hasGitHubAppAuth.mockReturnValue(false);
   });
 
   it("rejects a truncated recursive tree while fetching inputs concurrently", async () => {
@@ -374,6 +378,64 @@ describe("getGithubData repository input bounds", () => {
       githubPat: "github_pat_caller",
     });
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("reads private repository contents with a GitHub App installation and no caller PAT", async () => {
+    hasGitHubAppAuth.mockReturnValue(true);
+    const fetchMock = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/repos/acme/demo")) {
+          return jsonResponse({ default_branch: "main", private: true });
+        }
+        if (url.includes("/git/trees/main?recursive=1")) {
+          expect(new Headers(init?.headers).has("if-none-match")).toBe(false);
+          return new Response(
+            JSON.stringify({
+              truncated: false,
+              tree: [{ path: "src/private.ts", type: "blob" }],
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.endsWith("/repos/acme/demo/readme")) {
+          return jsonResponse({
+            size: 9,
+            content: Buffer.from("# Private").toString("base64"),
+            encoding: "base64",
+          });
+        }
+        throw new Error(`Unexpected GitHub URL: ${url}`);
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getGithubData("acme", "demo")).resolves.toMatchObject({
+      fileTree: "src/private.ts",
+      readme: "# Private",
+      isPrivate: true,
+    });
+    expect(getGitHubApiHeaders).toHaveBeenCalledWith({
+      githubPat: undefined,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("still rejects private access when only a server PAT pool is available", async () => {
+    hasGitHubAppAuth.mockReturnValue(false);
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith("/repos/acme/demo")) {
+        return jsonResponse({ default_branch: "main", private: true });
+      }
+      throw new Error(`Unexpected GitHub URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getGithubData("acme", "demo")).rejects.toThrow(
+      "A GitHub token is required to analyze a private repository.",
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("reports an empty repository when the tree endpoint returns 409", async () => {

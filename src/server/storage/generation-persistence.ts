@@ -40,10 +40,11 @@ export async function persistGenerationResult(params: {
 }): Promise<string | undefined> {
   const persistenceStartedAt = performance.now();
 
-  // The server's own GitHub credential can reach private repositories the
-  // caller never authenticated for. There is no destination for that result:
-  // the public bucket would expose it, and the private bucket is namespaced by
-  // the caller's token. Skip persistence rather than write something unreadable.
+  // The server PAT pool can reach private repositories the caller never
+  // authenticated for. There is no destination for that result: the public
+  // bucket would expose it, and the private bucket is namespaced by the
+  // caller's token (or a GitHub App installation). Skip rather than write
+  // something unreadable.
   if (!canPersistVisibility(params)) {
     console.info(
       JSON.stringify({

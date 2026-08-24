@@ -1,5 +1,9 @@
 import { createHmac } from "node:crypto";
 
+import {
+  hasGitHubAppAuth,
+  readGitHubInstallationId,
+} from "~/server/github-auth";
 import type { ArtifactVisibility } from "~/server/storage/types";
 import { readRequiredEnv } from "~/server/storage/config";
 
@@ -21,6 +25,20 @@ function createPatNamespace(githubPat: string): string {
 
   const secret = readRequiredEnv("CACHE_KEY_SECRET");
   return createHmac("sha256", secret).update(trimmedPat).digest("hex");
+}
+
+function createAppNamespace(): string {
+  const installationId = readGitHubInstallationId();
+  if (!installationId || !hasGitHubAppAuth()) {
+    throw new Error(
+      "A private storage location requires a non-empty GitHub token.",
+    );
+  }
+
+  const secret = readRequiredEnv("CACHE_KEY_SECRET");
+  return createHmac("sha256", secret)
+    .update(`github-app:${installationId}`)
+    .digest("hex");
 }
 
 export interface StorageLocation {
@@ -53,14 +71,13 @@ export function getPublicLocation(
   };
 }
 
-export function getPrivateLocation(
+function privateLocationForNamespace(
   username: string,
   repo: string,
-  githubPat: string,
+  namespace: string,
 ): StorageLocation {
   const normalizedUsername = normalizeSegment(username);
   const normalizedRepo = normalizeSegment(repo);
-  const namespace = createPatNamespace(githubPat);
 
   return {
     visibility: "private",
@@ -70,13 +87,33 @@ export function getPrivateLocation(
   };
 }
 
+export function getPrivateLocation(
+  username: string,
+  repo: string,
+  githubPat: string,
+): StorageLocation {
+  return privateLocationForNamespace(
+    username,
+    repo,
+    createPatNamespace(githubPat),
+  );
+}
+
+export function getPrivateAppLocation(
+  username: string,
+  repo: string,
+): StorageLocation {
+  return privateLocationForNamespace(username, repo, createAppNamespace());
+}
+
 /**
  * Resolves where a generation result should be written.
  *
- * A private artifact is namespaced by the caller's own token, so there is no
- * safe destination for a private repository the caller did not authenticate
- * for: the public bucket would expose it, and the empty-token namespace is
- * unreadable. Callers must handle that case before reaching storage —
+ * A private artifact is namespaced by the caller's own token when present.
+ * With a GitHub App installation configured, private results without a caller
+ * PAT go to a stable App namespace (installation id, not the rotating ghs_
+ * token). The public bucket must never receive a private diagram. Callers
+ * must handle the remaining case before reaching storage —
  * `canPersistVisibility` answers the same question without throwing.
  */
 export function getWriteLocation(params: {
@@ -89,18 +126,22 @@ export function getWriteLocation(params: {
     return getPublicLocation(params.username, params.repo);
   }
 
-  return getPrivateLocation(
-    params.username,
-    params.repo,
-    params.githubPat ?? "",
-  );
+  if (params.githubPat?.trim()) {
+    return getPrivateLocation(params.username, params.repo, params.githubPat);
+  }
+
+  return getPrivateAppLocation(params.username, params.repo);
 }
 
 export function canPersistVisibility(params: {
   visibility: ArtifactVisibility;
   githubPat?: string;
 }): boolean {
-  return params.visibility !== "private" || Boolean(params.githubPat?.trim());
+  return (
+    params.visibility !== "private" ||
+    Boolean(params.githubPat?.trim()) ||
+    hasGitHubAppAuth()
+  );
 }
 
 export function getReadLocations(params: {
@@ -113,6 +154,9 @@ export function getReadLocations(params: {
     locations.push(
       getPrivateLocation(params.username, params.repo, params.githubPat),
     );
+  }
+  if (hasGitHubAppAuth()) {
+    locations.push(getPrivateAppLocation(params.username, params.repo));
   }
   locations.push(getPublicLocation(params.username, params.repo));
   return locations;
