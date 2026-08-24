@@ -22,21 +22,43 @@ function readTrimmedEnv(name: string): string | undefined {
   return value ? value : undefined;
 }
 
+/**
+ * Conductor/systemd env files cannot store a raw multiline PEM. Operators
+ * typically paste a single line with `\n` escapes (or the BEGIN/END headers
+ * collapse onto one line). Node's OpenSSL decoder needs real PEM newlines.
+ */
+export function normalizeGitHubPrivateKey(raw: string): string {
+  let key = raw.trim();
+  if (
+    (key.startsWith('"') && key.endsWith('"')) ||
+    (key.startsWith("'") && key.endsWith("'"))
+  ) {
+    key = key.slice(1, -1).trim();
+  }
+  key = key.replace(/\\n/g, "\n").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  if (key.includes("-----BEGIN") && !key.includes("\n")) {
+    key = key.replace(/-----BEGIN ([^-]+)-----/, "-----BEGIN $1-----\n");
+    key = key.replace(/-----END ([^-]+)-----/, "\n-----END $1-----");
+  }
+  return key.endsWith("\n") ? key : `${key}\n`;
+}
+
 function toBase64Url(value: string) {
   return Buffer.from(value).toString("base64url");
 }
 
 function createGitHubAppJwt() {
-  const privateKey = readTrimmedEnv("GITHUB_PRIVATE_KEY");
+  const rawPrivateKey = readTrimmedEnv("GITHUB_PRIVATE_KEY");
   const issuer =
     readTrimmedEnv("GITHUB_APP_ID") ?? readTrimmedEnv("GITHUB_CLIENT_ID");
 
-  if (!privateKey || !issuer) {
+  if (!rawPrivateKey || !issuer) {
     throw new Error(
       "Missing GitHub App credentials. Set GITHUB_PRIVATE_KEY and GITHUB_APP_ID or GITHUB_CLIENT_ID.",
     );
   }
 
+  const privateKey = normalizeGitHubPrivateKey(rawPrivateKey);
   const now = Math.floor(Date.now() / 1000);
   const header = toBase64Url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
   const payload = toBase64Url(
@@ -49,7 +71,14 @@ function createGitHubAppJwt() {
   const signer = createSign("RSA-SHA256");
   signer.update(`${header}.${payload}`);
   signer.end();
-  const signature = signer.sign(privateKey, "base64url");
+  let signature: string;
+  try {
+    signature = signer.sign(privateKey, "base64url");
+  } catch {
+    throw new Error(
+      "GitHub App private key is not valid PEM. Re-set GITHUB_PRIVATE_KEY as a single line with \\n between PEM lines.",
+    );
+  }
 
   return `${header}.${payload}.${signature}`;
 }
