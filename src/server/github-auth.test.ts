@@ -1,9 +1,11 @@
 // @vitest-environment node
+import { createPrivateKey, generateKeyPairSync } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
   getGitHubApiHeaders,
   hasGitHubAppAuth,
+  normalizeGitHubPrivateKey,
   readGitHubInstallationId,
   readGitHubPatPool,
 } from "~/server/github-auth";
@@ -77,6 +79,29 @@ describe("readGitHubPatPool", () => {
     ).resolves.toMatchObject({
       Authorization: "Bearer request-token",
     });
+  });
+});
+
+describe("normalizeGitHubPrivateKey", () => {
+  const pem = generateKeyPairSync("rsa", { modulusLength: 2048 })
+    .privateKey.export({ type: "pkcs1", format: "pem" })
+    .toString();
+
+  it("turns escaped newlines into a key OpenSSL can load", () => {
+    const escaped = pem.replace(/\n/g, "\\n");
+    expect(escaped).not.toContain("\n");
+
+    const normalized = normalizeGitHubPrivateKey(escaped);
+    expect(() => createPrivateKey(normalized)).not.toThrow();
+  });
+
+  it("rebuilds a collapsed one-line PEM", () => {
+    const collapsed = pem.replace(/\n/g, "");
+    expect(collapsed.startsWith("-----BEGIN")).toBe(true);
+    expect(collapsed.includes("\n")).toBe(false);
+
+    const normalized = normalizeGitHubPrivateKey(collapsed);
+    expect(() => createPrivateKey(normalized)).not.toThrow();
   });
 });
 
