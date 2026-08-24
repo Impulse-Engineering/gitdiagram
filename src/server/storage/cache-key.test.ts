@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   canPersistVisibility,
+  getPrivateAppLocation,
   getPrivateLocation,
   getPublicLocation,
   getPublicPreviewKey,
@@ -78,6 +79,36 @@ describe("getWriteLocation", () => {
       }),
     ).toThrow(/non-empty GitHub token/u);
   });
+
+  it("writes App-backed private results to a stable installation namespace", () => {
+    process.env.GITHUB_PRIVATE_KEY = "test-pem";
+    process.env.GITHUB_APP_ID = "123";
+    process.env.GITHUB_INSTALLATION_ID = "456";
+
+    const first = getWriteLocation({
+      username: "acme",
+      repo: "demo",
+      visibility: "private",
+    });
+    const second = getWriteLocation({
+      username: "acme",
+      repo: "demo",
+      visibility: "private",
+    });
+    const withCallerPat = getWriteLocation({
+      username: "acme",
+      repo: "demo",
+      visibility: "private",
+      githubPat: "caller-token",
+    });
+
+    expect(first.artifactKey).toBe(second.artifactKey);
+    expect(first.artifactKey).toBe(
+      getPrivateAppLocation("acme", "demo").artifactKey,
+    );
+    expect(first.artifactKey).not.toBe(withCallerPat.artifactKey);
+    expect(first.bucket).toBe("private-bucket");
+  });
 });
 
 describe("canPersistVisibility", () => {
@@ -90,6 +121,14 @@ describe("canPersistVisibility", () => {
     expect(
       canPersistVisibility({ visibility: "private", githubPat: "  " }),
     ).toBe(false);
+  });
+
+  it("allows private persistence when a GitHub App installation is configured", () => {
+    process.env.GITHUB_PRIVATE_KEY = "test-pem";
+    process.env.GITHUB_APP_ID = "123";
+    process.env.GITHUB_INSTALLATION_ID = "456";
+
+    expect(canPersistVisibility({ visibility: "private" })).toBe(true);
   });
 });
 
@@ -111,6 +150,40 @@ describe("getReadLocations", () => {
     expect(locations.map((location) => location.visibility)).toEqual([
       "private",
       "public",
+    ]);
+  });
+
+  it("reads the App private namespace without a caller token", () => {
+    process.env.GITHUB_PRIVATE_KEY = "test-pem";
+    process.env.GITHUB_APP_ID = "123";
+    process.env.GITHUB_INSTALLATION_ID = "456";
+
+    const locations = getReadLocations({ username: "acme", repo: "demo" });
+
+    expect(locations.map((location) => location.visibility)).toEqual([
+      "private",
+      "public",
+    ]);
+    expect(locations[0]?.artifactKey).toBe(
+      getPrivateAppLocation("acme", "demo").artifactKey,
+    );
+  });
+
+  it("prefers the caller PAT namespace, then the App namespace, then public", () => {
+    process.env.GITHUB_PRIVATE_KEY = "test-pem";
+    process.env.GITHUB_APP_ID = "123";
+    process.env.GITHUB_INSTALLATION_ID = "456";
+
+    const locations = getReadLocations({
+      username: "acme",
+      repo: "demo",
+      githubPat: "token",
+    });
+
+    expect(locations.map((location) => location.artifactKey)).toEqual([
+      getPrivateLocation("acme", "demo", "token").artifactKey,
+      getPrivateAppLocation("acme", "demo").artifactKey,
+      getPublicLocation("acme", "demo").artifactKey,
     ]);
   });
 });

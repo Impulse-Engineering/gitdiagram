@@ -54,12 +54,16 @@ function createGitHubAppJwt() {
   return `${header}.${payload}.${signature}`;
 }
 
-function hasGitHubAppAuth() {
+export function hasGitHubAppAuth() {
   return Boolean(
     readTrimmedEnv("GITHUB_PRIVATE_KEY") &&
     (readTrimmedEnv("GITHUB_APP_ID") || readTrimmedEnv("GITHUB_CLIENT_ID")) &&
     readTrimmedEnv("GITHUB_INSTALLATION_ID"),
   );
+}
+
+export function readGitHubInstallationId() {
+  return readTrimmedEnv("GITHUB_INSTALLATION_ID");
 }
 
 export function readGitHubPatPool() {

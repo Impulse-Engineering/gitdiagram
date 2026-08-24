@@ -1,4 +1,4 @@
-import { getGitHubApiHeaders } from "../github-auth";
+import { getGitHubApiHeaders, hasGitHubAppAuth } from "../github-auth";
 
 interface GitHubRepoResponse {
   default_branch?: string;
@@ -396,10 +396,11 @@ export async function getGithubData(
     signal,
   );
 
-  // GitHub App installation tokens and the server PAT pool may be able to read
-  // private repositories. They improve public API rate limits, but they must
-  // never become authorization for an anonymous caller.
-  if (isPrivate && !hasCallerGithubPat) {
+  // The server PAT pool may be able to read private repositories; it is only
+  // a public rate-limit helper and must not authorize anonymous private access.
+  // A configured GitHub App installation is operator intent for this instance
+  // (self-hosted, typically Access-gated) and may authorize private analysis.
+  if (isPrivate && !hasCallerGithubPat && !hasGitHubAppAuth()) {
     throw new Error(PRIVATE_REPOSITORY_AUTH_REQUIRED_ERROR);
   }
 

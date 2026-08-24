@@ -100,6 +100,41 @@ describe("persistGenerationResult", () => {
     );
   });
 
+  it("persists a private repository when a GitHub App installation is configured", async () => {
+    const previous = {
+      privateKey: process.env.GITHUB_PRIVATE_KEY,
+      appId: process.env.GITHUB_APP_ID,
+      installationId: process.env.GITHUB_INSTALLATION_ID,
+    };
+    process.env.GITHUB_PRIVATE_KEY = "test-pem";
+    process.env.GITHUB_APP_ID = "123";
+    process.env.GITHUB_INSTALLATION_ID = "456";
+
+    try {
+      const warning = await persistGenerationResult({
+        ...baseParams(),
+        visibility: "private",
+        githubPat: undefined,
+      });
+
+      expect(warning).toBeUndefined();
+      expect(mocks.saveSuccessfulDiagramState).toHaveBeenCalledWith(
+        expect.objectContaining({ visibility: "private" }),
+      );
+    } finally {
+      if (previous.privateKey === undefined)
+        delete process.env.GITHUB_PRIVATE_KEY;
+      else process.env.GITHUB_PRIVATE_KEY = previous.privateKey;
+      if (previous.appId === undefined) delete process.env.GITHUB_APP_ID;
+      else process.env.GITHUB_APP_ID = previous.appId;
+      if (previous.installationId === undefined) {
+        delete process.env.GITHUB_INSTALLATION_ID;
+      } else {
+        process.env.GITHUB_INSTALLATION_ID = previous.installationId;
+      }
+    }
+  });
+
   it("revalidates both the normalized and the requested page path", async () => {
     const params = { ...baseParams(), visibility: "public" as const };
 
